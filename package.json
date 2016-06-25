@@ -1,6 +1,6 @@
 {
   "name": "nmud",
-  "version": "0.1a",
+  "version": "v0.0.1-a",
   "description": "nMud Node.JS experimental MUD",
   "author": "Andrew Pamment <apamment@yandex.com>",
   "license": "BSD-2-Clause",
@@ -13,7 +13,7 @@
     "telnet"
   ],
   "dependencies": {
-    "sqlite3": "^3.1.1",
+    "sqlite3": "^3.1.1"
   },
   "engines": {
     "node": ">=0.12.2"
