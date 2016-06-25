@@ -13,6 +13,11 @@ function initDatabase() {
                     'email TEXT,' +
                     'curroom INTEGER);'
     );
+    dbs.user.run('CREATE TABLE IF NOT EXISTS inventory(' +
+                    'id INTEGER PRIMARY KEY AUTOINCREMENT,' +
+                    'objectid INTEGER,' +
+                    'playerid INTEGER);'
+    );
   });
   dbs.world = new sqlite3.Database('world.db');
   dbs.world.serialize(function serialized() {
@@ -28,6 +33,19 @@ function initDatabase() {
                   'roomid INTEGER,' +
                   'nextroomid INTEGER);'
                 );
+    dbs.world.run('CREATE TABLE IF NOT EXISTS objects(' +
+                  'id INTEGER PRIMARY KEY AUTOINCREMENT,' +
+                  'name TEXT,' +
+                  'description TEXT,' +
+                  'uniq INTEGER,' +
+                  'locked INTEGER);'
+                );
+    dbs.world.run('CREATE TABLE IF NOT EXISTS room_objs(' +
+                  'id INTEGER PRIMARY KEY AUTOINCREMENT,' +
+                  'roomid INTEGER,' +
+                  'objectid INTEGER);'
+                );
+
   });
 }
 
