@@ -439,6 +439,7 @@ mnode.prototype.process = function(nodes, k) {
       nodes[k].sock.write("    get [object]: will pickup [object]\r\n");
       nodes[k].sock.write("    inv: Show your inventory\r\n");
       nodes[k].sock.write("    drop [object]: drop [object] from your inventory\r\n");
+      nodes[k].sock.write("    examine [thing]: examines [thing] which could be an object or an exit.")
       nodes[k].sock.write("    [exit]: follows an \"exit\"\r\n");
       nodes[k].sock.write("\r\n");
       nodes[k].buff = "";
