@@ -11,6 +11,50 @@ function mnode(socket) {
   this.room = 1;
 }
 
+mnode.prototype.examine = function(nodes, k, object) {
+  var userdb = require('./database.js').dbs.user;
+  var worlddb = require('./database.js').dbs.world;
+
+
+  worlddb.serialize(function() {
+    worlddb.all(
+      'SELECT name,description FROM objects WHERE name LIKE ? AND id IN (SELECT objectid FROM room_objs WHERE roomid = ?)',
+      [ object, nodes[k].room ],
+      function(err, rows) {
+        for (var i = 0;  i < rows.length; i++) {
+          nodes[k].sock.write("\r\n" + rows[i].name + ": " + rows[i].description + "\r\n");
+        }
+      }
+    )
+    worlddb.all(
+      'SELECT name,description FROM exits WHERE name LIKE ? AND roomid = ?',
+      [ object, nodes[k].room ],
+      function(err, rows) {
+        for (var i = 0; i < rows.length; i++) {
+          nodes[k].sock.write("\r\n" + rows[i].name + ": " + rows[i].description + "\r\n");
+        }
+      }
+    )
+  });
+  userdb.all(
+    'SELECT objectid FROM inventory WHERE playerid = ?',
+    [ nodes[k].uid ],
+    function(err, rows) {
+      for (var i = 0; i < rows.length; i++) {
+        worlddb.get(
+          'SELECT name,description FROM objects WHERE id = ? AND name LIKE ?',
+          [ rows[i].objectid, object ],
+          function(err, row) {
+            if (row) {
+              nodes[k].sock.write("\r\n(Inventory) " + row.name + ": " + row.description + "\r\n");
+            }
+          }
+        )
+      }
+    }
+  )
+}
+
 mnode.prototype.drop = function(nodes, k, object) {
   var userdb = require('./database.js').dbs.user;
   var worlddb = require('./database.js').dbs.world;
@@ -168,6 +212,7 @@ mnode.prototype.displayroom = function(nodes, k) {
         } else {
           if (row) {
             var desc = row.description.replace(/\r?\n/g, '\r\n');
+            var noplayers = 1;
             nodes[k].sock.write("\r\n\r\n" + row.name + "\r\n");
             nodes[k].sock.write("-----------------------------------------------------\r\n");
             nodes[k].sock.write(desc);
@@ -177,11 +222,14 @@ mnode.prototype.displayroom = function(nodes, k) {
             for (var j = 0; j < nodes.length; j++) {
               if (j != k && nodes[j].room === nodes[k].room && nodes[j].uname !== "UNKNOWN") {
                 nodes[k].sock.write(nodes[j].uname + ", ");
+                noplayers = 0;
               }
+            }
+            if (noplayers == 1) {
+              nodes[k].sock.write("none.");
             }
           } else {
             nodes[k].sock.write("\r\nYou're floating through the twisting nether!\r\n");
-            return;
           }
         }
       }
@@ -225,7 +273,7 @@ mnode.prototype.displayroom = function(nodes, k) {
             }
             nodes[k].sock.write("\r\n");
           } else {
-            nodes[k].sock.write("none.\r\n");
+            nodes[k].sock.write("\r\nObjects: none.\r\n");
           }
         }
       }
@@ -337,8 +385,6 @@ mnode.prototype.process = function(nodes, k) {
     }
     nodes[k].buff = "";
   } else if (nodes[k].state == 10){
-
-
     if (nodes[k].buff === "quit") {
       nodes[k].sock.end('\r\nGoodbye!\r\n');
     } else if (nodes[k].buff === "look") {
@@ -358,6 +404,9 @@ mnode.prototype.process = function(nodes, k) {
       nodes[k].buff = "";
     } else if (nodes[k].buff.substring(0, 4) === "drop") {
       nodes[k].drop(nodes, k, nodes[k].buff.substring(5));
+      nodes[k].buff = "";
+    } else if (nodes[k].buff.substring(0, 7) == "examine") {
+      nodes[k].examine(nodes, k, nodes[k].buff.substring(8));
       nodes[k].buff = "";
     } else if (nodes[k].buff.substring(0, 3) === "get") {
       var obj = nodes[k].buff.substring(4);
@@ -404,8 +453,11 @@ mnode.prototype.process = function(nodes, k) {
             nodes[k].sock.end("Goodbye!\r\n");
           } else {
             if (rows.length > 0) {
+              var handled = 0;
+
               for (var i = 0; i < rows.length; i++) {
                 if (nodes[k].buff.toLowerCase() === rows[i].name.toLowerCase()) {
+                  handled = 1;
                   for (var j = 0; j < nodes.length; j++) {
                     if (k != j && nodes[j].room == nodes[k].room && nodes[j].uname !== "UNKNOWN") {
                       nodes[j].sock.write("\r\n\r\n" + nodes[k].uname + " leaves.\r\n\r\n");
@@ -422,6 +474,10 @@ mnode.prototype.process = function(nodes, k) {
                   }
                   nodes[k].displayroom(nodes, k);
                 }
+              }
+              if (handled == 0) {
+                nodes[k].sock.write("\r\nUnknown Command. Type HELP for help.\r\n");
+                nodes[k].buff = "";
               }
               nodes[k].buff = "";
             } else {
