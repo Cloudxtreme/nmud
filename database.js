@@ -11,7 +11,8 @@ function initDatabase() {
                     'loginname TEXT COLLATE NOCASE,' +
                     'password TEXT,' +
                     'email TEXT,' +
-                    'curroom INTEGER);'
+                    'curroom INTEGER,' +
+                    'currency INTEGER);'
     );
     dbs.user.run('CREATE TABLE IF NOT EXISTS inventory(' +
                     'id INTEGER PRIMARY KEY AUTOINCREMENT,' +

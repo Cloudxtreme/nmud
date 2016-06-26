@@ -1,5 +1,5 @@
 var sqlite3 = require('sqlite3').verbose();
-
+var async = require('async');
 function mnode(socket) {
   this.uid = 0;
   this.state = 0;
@@ -9,6 +9,12 @@ function mnode(socket) {
   this.email = "";
   this.password = "";
   this.room = 1;
+  this.currency = 0;
+}
+
+mnode.prototype.prompt = function(nodes, k) {
+  nodes[k].buff = "";
+  nodes[k].sock.write("\r\n:> ");
 }
 
 mnode.prototype.examine = function(nodes, k, object) {
@@ -16,43 +22,59 @@ mnode.prototype.examine = function(nodes, k, object) {
   var worlddb = require('./database.js').dbs.world;
 
 
-  worlddb.serialize(function() {
-    worlddb.all(
-      'SELECT name,description FROM objects WHERE name LIKE ? AND id IN (SELECT objectid FROM room_objs WHERE roomid = ?)',
-      [ object, nodes[k].room ],
-      function(err, rows) {
-        for (var i = 0;  i < rows.length; i++) {
-          nodes[k].sock.write("\r\n" + rows[i].name + ": " + rows[i].description + "\r\n");
-        }
-      }
-    )
-    worlddb.all(
-      'SELECT name,description FROM exits WHERE name LIKE ? AND roomid = ?',
-      [ object, nodes[k].room ],
-      function(err, rows) {
-        for (var i = 0; i < rows.length; i++) {
-          nodes[k].sock.write("\r\n" + rows[i].name + ": " + rows[i].description + "\r\n");
-        }
-      }
-    )
-  });
-  userdb.all(
-    'SELECT objectid FROM inventory WHERE playerid = ?',
-    [ nodes[k].uid ],
-    function(err, rows) {
-      for (var i = 0; i < rows.length; i++) {
-        worlddb.get(
-          'SELECT name,description FROM objects WHERE id = ? AND name LIKE ?',
-          [ rows[i].objectid, object ],
-          function(err, row) {
-            if (row) {
-              nodes[k].sock.write("\r\n(Inventory) " + row.name + ": " + row.description + "\r\n");
-            }
+  async.series([
+    function examineRoomObj(cb) {
+      worlddb.all(
+        'SELECT name,description FROM objects WHERE name LIKE ? AND id IN (SELECT objectid FROM room_objs WHERE roomid = ?)',
+        [ object, nodes[k].room ],
+        function(err, rows) {
+          for (var i = 0;  i < rows.length; i++) {
+            nodes[k].sock.write("\r\n" + rows[i].name + ": " + rows[i].description + "\r\n");
           }
-        )
-      }
+          cb(null);
+        }
+      )
+    },
+
+    function examineExits(cb) {
+      worlddb.all(
+        'SELECT name,description FROM exits WHERE name LIKE ? AND roomid = ?',
+        [ object, nodes[k].room ],
+        function(err, rows) {
+          for (var i = 0; i < rows.length; i++) {
+            nodes[k].sock.write("\r\n" + rows[i].name + ": " + rows[i].description + "\r\n");
+          }
+          cb(null);
+        }
+      )
+    },
+    function examineInventory(cb) {
+      userdb.all(
+        'SELECT objectid FROM inventory WHERE playerid = ?',
+        [ nodes[k].uid ],
+        function(err, rows) {
+          async.each(rows, function showInv(row, cb2) {
+            worlddb.get(
+              'SELECT name,description FROM objects WHERE id = ? AND name LIKE ?',
+              [ row.objectid, object ],
+              function(err, row) {
+                if (row) {
+                  nodes[k].sock.write("\r\n(Inventory) " + row.name + ": " + row.description + "\r\n");
+                }
+                cb2(null);
+              }
+            )
+          }, function(err) {
+            if (!err) {
+              cb(null);
+            }
+          });
+        }
+      )
+    }], function showPrompt(err) {
+      nodes[k].prompt(nodes, k);
     }
-  )
+  );
 }
 
 mnode.prototype.drop = function(nodes, k, object) {
@@ -69,6 +91,7 @@ mnode.prototype.drop = function(nodes, k, object) {
         objectid = row.id;
         if (row.uniq == 0) {
           nodes[k].sock.write("\r\nYou can't drop that.\r\n");
+          nodes[k].prompt(nodes, k);
         } else {
           userdb.get (
             'SELECT id FROM inventory WHERE objectid=? AND playerid=?',
@@ -84,14 +107,17 @@ mnode.prototype.drop = function(nodes, k, object) {
                   [ nodes[k].room, objectid ]
                 );
                 nodes[k].sock.write("\r\nItem Dropped!\r\n");
+                nodes[k].prompt(nodes, k);
               } else {
                 nodes[k].sock.write("\r\nYou don't have one of those!\r\n");
+                nodes[k].prompt(nodes, k);
               }
             }
           )
         }
       } else {
         nodes[k].sock.write("\r\nYou don't have one of those!\r\n");
+        nodes[k].prompt(nodes, k);
       }
     }
   );
@@ -112,15 +138,23 @@ mnode.prototype.inventory = function(nodes, k) {
 
       nodes[k].sock.write("\r\n\r\nInventory\r\n");
       nodes[k].sock.write("-----------------------------------------------------\r\n");
-      for (var j = 0; j < inventoryObjects.length; j++) {
+
+      async.each(inventoryObjects, function getName(object, cb) {
         worlddb.get(
           'SELECT name FROM objects WHERE id = ?',
-          [ inventoryObjects[j] ],
+          [ object ],
           function onResult(err, row) {
-            nodes[k].sock.write(row.name + "\r\n");
+            if (row) {
+              nodes[k].sock.write(row.name + "\r\n");
+              cb();
+            }
           }
         );
-      }
+      }, function(err) {
+        if (!err) {
+          nodes[k].prompt(nodes, k);
+        }
+      });
     }
   );
 }
@@ -145,6 +179,7 @@ mnode.prototype.getobj = function(nodes, k, obj_id) {
           if (row) {
             if (row.locked == 1) {
               nodes[k].sock.write("\r\nThat object can't be picked up!\r\n");
+              nodes[k].prompt(nodes, k);
             } else {
               if (row.uniq == 1) {
                 worlddb.run(
@@ -156,6 +191,7 @@ mnode.prototype.getobj = function(nodes, k, obj_id) {
                   [ obj_id, nodes[k].uid ]
                 );
                 nodes[k].sock.write("\r\nObject picked up!\r\n");
+                nodes[k].prompt(nodes, k);
               } else {
                 userdb.serialize(function() {
                   userdb.get(
@@ -169,8 +205,10 @@ mnode.prototype.getobj = function(nodes, k, obj_id) {
                       } else {
                         if (row) {
                           nodes[k].sock.write("\r\nYou already have one of those.\r\n");
+                          nodes[k].prompt(nodes, k);
                         } else {
                           nodes[k].sock.write("\r\nObject picked up!\r\n");
+                          nodes[k].prompt(nodes, k);
                         }
                       }
                     }
@@ -200,85 +238,97 @@ mnode.prototype.saveuser = function(nodes, k) {
 mnode.prototype.displayroom = function(nodes, k) {
   var worlddb = require('./database.js').dbs.world;
 
-  worlddb.serialize(function() {
-    worlddb.get(
-      'SELECT id, name, description FROM rooms WHERE id = ?',
-      [ nodes[k].room ],
-      function onResults(err, row) {
-        if (err) {
-          // sql error?
-          nodes[k].sock.write("\r\nSQL Error!\r\n");
-          nodes[k].sock.end("Goodbye!\r\n");
-        } else {
-          if (row) {
-            var desc = row.description.replace(/\r?\n/g, '\r\n');
-            var noplayers = 1;
-            nodes[k].sock.write("\r\n\r\n" + row.name + "\r\n");
-            nodes[k].sock.write("-----------------------------------------------------\r\n");
-            nodes[k].sock.write(desc);
+  async.series([
+    function getRoomDesc(cb) {
+      worlddb.get(
+        'SELECT id, name, description FROM rooms WHERE id = ?',
+        [ nodes[k].room ],
+        function onResults(err, row) {
+          if (err) {
+            // sql error?
+            nodes[k].sock.write("\r\nSQL Error!\r\n");
+            nodes[k].sock.end("Goodbye!\r\n");
+          } else {
+            if (row) {
+              var desc = row.description.replace(/\r?\n/g, '\r\n');
+              var noplayers = 1;
+              nodes[k].sock.write("\r\n\r\n" + row.name + "\r\n");
+              nodes[k].sock.write("-----------------------------------------------------\r\n");
+              nodes[k].sock.write(desc);
 
-            nodes[k].sock.write("\r\n\r\nPlayers: ");
+              nodes[k].sock.write("\r\n\r\nPlayers: ");
 
-            for (var j = 0; j < nodes.length; j++) {
-              if (j != k && nodes[j].room === nodes[k].room && nodes[j].uname !== "UNKNOWN") {
-                nodes[k].sock.write(nodes[j].uname + ", ");
-                noplayers = 0;
+              for (var j = 0; j < nodes.length; j++) {
+                if (j != k && nodes[j].room === nodes[k].room && nodes[j].uname !== "UNKNOWN") {
+                  nodes[k].sock.write(nodes[j].uname + ", ");
+                  noplayers = 0;
+                }
               }
+              if (noplayers == 1) {
+                nodes[k].sock.write("none.");
+              }
+              cb(null);
+            } else {
+              nodes[k].sock.write("\r\nYou're floating through the twisting nether!\r\n");
+              cb('done');
             }
-            if (noplayers == 1) {
-              nodes[k].sock.write("none.");
-            }
-          } else {
-            nodes[k].sock.write("\r\nYou're floating through the twisting nether!\r\n");
           }
         }
-      }
-    );
-
-    worlddb.all(
-      'SELECT id, name, description, roomid, nextroomid FROM exits WHERE roomid = ?',
-      [ nodes[k].room ],
-      function onResults(err, rows) {
-        if (err) {
-          // sql error?
-          nodes[k].sock.write("\r\nSQL Error!\r\n");
-          nodes[k].sock.end("Goodbye!\r\n");
-        } else {
-          nodes[k].sock.write("\r\n\r\nExits: ");
-          if (rows.length > 0) {
-            for (var i = 0; i < rows.length; i++) {
-              nodes[k].sock.write(rows[i].name + ", ");
-            }
+      );
+    },
+    function showExits(cb) {
+      worlddb.all(
+        'SELECT id, name, description, roomid, nextroomid FROM exits WHERE roomid = ?',
+        [ nodes[k].room ],
+        function onResults(err, rows) {
+          if (err) {
+            // sql error?
+            nodes[k].sock.write("\r\nSQL Error!\r\n");
+            nodes[k].sock.end("Goodbye!\r\n");
           } else {
-            nodes[k].sock.write("none.")
-          }
-          nodes[k].sock.write("\r\n");
-        }
-      }
-    );
-
-    worlddb.all(
-      'SELECT objects.name FROM room_objs,objects WHERE room_objs.roomid = ? AND room_objs.objectid = objects.id',
-      [ nodes[k].room ],
-      function onResult(err, rows) {
-        if (err) {
-          // sql error?
-          nodes[k].sock.write("\r\nSQL Error!\r\n");
-          nodes[k].sock.end("Goodbye!\r\n");
-        } else {
-          if (rows.length > 0) {
-            nodes[k].sock.write("\r\nObjects: ")
-            for (var i = 0; i < rows.length; i++) {
-              nodes[k].sock.write(rows[i].name + ", ");
+            nodes[k].sock.write("\r\n\r\nExits: ");
+            if (rows.length > 0) {
+              for (var i = 0; i < rows.length; i++) {
+                nodes[k].sock.write(rows[i].name + ", ");
+              }
+            } else {
+              nodes[k].sock.write("none.")
             }
             nodes[k].sock.write("\r\n");
-          } else {
-            nodes[k].sock.write("\r\nObjects: none.\r\n");
+            cb(null);
           }
         }
-      }
-    );
-  });
+      );
+    },
+    function showObjects(cb) {
+      worlddb.all(
+        'SELECT objects.name FROM room_objs,objects WHERE room_objs.roomid = ? AND room_objs.objectid = objects.id',
+        [ nodes[k].room ],
+        function onResult(err, rows) {
+          if (err) {
+            // sql error?
+            nodes[k].sock.write("\r\nSQL Error!\r\n");
+            nodes[k].sock.end("Goodbye!\r\n");
+          } else {
+            if (rows.length > 0) {
+              nodes[k].sock.write("\r\nObjects: ")
+              for (var i = 0; i < rows.length; i++) {
+                nodes[k].sock.write(rows[i].name + ", ");
+              }
+              nodes[k].sock.write("\r\n");
+            } else {
+              nodes[k].sock.write("\r\nObjects: none.\r\n");
+            }
+          }
+          cb(null);
+        }
+      );
+    },
+    function showPrompt(cb) {
+      nodes[k].prompt(nodes, k);
+      cb(null);
+    }
+  ]);
 }
 
 mnode.prototype.process = function(nodes, k) {
@@ -298,7 +348,7 @@ mnode.prototype.process = function(nodes, k) {
     }
   } else if (nodes[k].state === 1) {
     userdb.get(
-      'SELECT id, loginname, password, curroom FROM users WHERE loginname LIKE ?',
+      'SELECT id, loginname, password, curroom, currency FROM users WHERE loginname LIKE ?',
       [ nodes[k].uname ],
       function onResults(err, row) {
         if (err) {
@@ -314,6 +364,7 @@ mnode.prototype.process = function(nodes, k) {
               nodes[k].sock.write("\r\nWelcome " + nodes[k].uname + "!\r\n");
               nodes[k].displayroom(nodes, k);
               nodes[k].state = 10;
+              nodes[k].currency = row.currency;
             } else {
               nodes[k].sock.end("\r\nPassword Mismatch! Goodbye!\r\n");
             }
@@ -356,6 +407,7 @@ mnode.prototype.process = function(nodes, k) {
   } else if (nodes[k].state == 4) {
     nodes[k].password = nodes[k].buff;
     nodes[k].buff = "";
+    nodes[k].currency = 0;
     nodes[k].sock.write("\r\n\r\nYou Entered:\r\n");
     nodes[k].sock.write("-----------------------------------------------------\r\n");
     nodes[k].sock.write("Login Name: " + nodes[k].uname + "\r\n");
@@ -367,8 +419,8 @@ mnode.prototype.process = function(nodes, k) {
   } else if (nodes[k].state == 5) {
     if (nodes[k].buff[0] == 'y' || nodes[k].buff[0] == 'Y') {
       userdb.run(
-        'INSERT INTO users (loginname, email, password, curroom) VALUES(?, ?, ?, ?)',
-        [ nodes[k].uname, nodes[k].email, nodes[k].password, nodes[k].room ],
+        'INSERT INTO users (loginname, email, password, curroom, currency) VALUES(?, ?, ?, ?, ?)',
+        [ nodes[k].uname, nodes[k].email, nodes[k].password, nodes[k].room, nodes[k].currency ],
         function userInsert(err) {
           if (err) {
             nodes[k].sock.end("\r\nSQL Error! Goodbye!\r\n");
@@ -389,7 +441,6 @@ mnode.prototype.process = function(nodes, k) {
       nodes[k].sock.end('\r\nGoodbye!\r\n');
     } else if (nodes[k].buff === "look") {
       nodes[k].displayroom(nodes, k);
-      nodes[k].buff = "";
     } else if (nodes[k].buff.substring(0, 3) === "say") {
       nodes[k].buff = nodes[k].buff.substring(4) + "\r\n";
       for (var i = 0; i < nodes.length; i++) {
@@ -398,16 +449,13 @@ mnode.prototype.process = function(nodes, k) {
         }
       }
       nodes[k].sock.write("\r\n");
-      nodes[k].buff = "";
+      nodes[k].prompt(nodes, k);
     } else if (nodes[k].buff.substring(0, 3) === "inv") {
       nodes[k].inventory(nodes, k);
-      nodes[k].buff = "";
     } else if (nodes[k].buff.substring(0, 4) === "drop") {
       nodes[k].drop(nodes, k, nodes[k].buff.substring(5));
-      nodes[k].buff = "";
     } else if (nodes[k].buff.substring(0, 7) == "examine") {
       nodes[k].examine(nodes, k, nodes[k].buff.substring(8));
-      nodes[k].buff = "";
     } else if (nodes[k].buff.substring(0, 3) === "get") {
       var obj = nodes[k].buff.substring(4);
       worlddb.serialize(function() {
@@ -423,13 +471,12 @@ mnode.prototype.process = function(nodes, k) {
                 nodes[k].getobj(nodes, k, row.objectid);
               } else {
                 nodes[k].sock.write("\r\nNo such object?\r\n")
+                nodes[k].prompt(nodes, k);
               }
             }
           }
         );
       });
-
-      nodes[k].buff = "";
     } else if (nodes[k].buff === "help") {
       nodes[k].sock.write("\r\n\r\nSo, you need some help eh?\r\n\r\n");
       nodes[k].sock.write("Commands:\r\n");
@@ -439,10 +486,10 @@ mnode.prototype.process = function(nodes, k) {
       nodes[k].sock.write("    get [object]: will pickup [object]\r\n");
       nodes[k].sock.write("    inv: Show your inventory\r\n");
       nodes[k].sock.write("    drop [object]: drop [object] from your inventory\r\n");
-      nodes[k].sock.write("    examine [thing]: examines [thing] which could be an object or an exit.")
+      nodes[k].sock.write("    examine [thing]: examines [thing] which could be an object or an exit.\r\n")
       nodes[k].sock.write("    [exit]: follows an \"exit\"\r\n");
       nodes[k].sock.write("\r\n");
-      nodes[k].buff = "";
+      nodes[k].prompt(nodes, k);
     } else {
       worlddb.all(
         'SELECT id, name, description, roomid, nextroomid FROM exits WHERE roomid = ?',
@@ -478,12 +525,11 @@ mnode.prototype.process = function(nodes, k) {
               }
               if (handled == 0) {
                 nodes[k].sock.write("\r\nUnknown Command. Type HELP for help.\r\n");
-                nodes[k].buff = "";
               }
-              nodes[k].buff = "";
+              nodes[k].prompt(nodes, k);
             } else {
               nodes[k].sock.write("\r\nUnknown Command. Type HELP for help.\r\n");
-              nodes[k].buff = "";
+              nodes[k].prompt(nodes, k);
             }
           }
         }
